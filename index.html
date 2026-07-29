@@ -41,6 +41,11 @@
   button.on{border-color:var(--accent); color:var(--accent);}
   #playBtn{background:var(--accent); color:#14100A; border-color:var(--accent); font-weight:600; min-width:92px;}
   input[type=range]{flex:1; min-width:140px; accent-color:var(--accent);}
+  .dscale{display:flex; align-items:center; gap:5px; font-size:11.5px; color:var(--muted);
+    border:1px solid var(--hair); border-radius:8px; padding:3px 8px 3px 10px;}
+  .dscale select{font:inherit; font-size:12.5px; color:var(--ink); background:transparent;
+    border:none; cursor:pointer; padding:3px 0;}
+  .dscale option{background:#131A22; color:#E9EBEE;}
   .strip{display:flex; align-items:flex-end; gap:2px; height:26px; margin-top:9px;}
   .strip div{flex:1; background:rgba(255,255,255,.13); border-radius:2px 2px 0 0; min-height:2px;}
   .striplabels{display:flex; justify-content:space-between; font-size:10px; color:var(--muted);
@@ -181,6 +186,11 @@
     <button id="topBtn" title="真上からの視点に切り替え">上空視点</button>
     <button id="ghostBtn" title="地図を半透明にして地下の震源を見る">地図を透過</button>
     <button id="histBtn">ヒストグラム</button>
+    <label class="dscale">深さ強調
+      <select id="depthScale" aria-label="深さ方向の強調倍率">
+        <option value="1">×1</option><option value="2.2" selected>×2</option>
+        <option value="4">×4</option><option value="6">×6</option><option value="10">×10</option>
+      </select></label>
     <button id="listToggle">一覧</button>
     <button id="liveBtn" title="気象庁の地震情報JSONから最新の実データを取得">最新データを取得</button>
     <input type="range" id="timeSlider" min="0" max="960" step="5" value="0" aria-label="時刻スライダー">
@@ -260,7 +270,7 @@ const MF0=mfrac(LAT0),MF1=mfrac(LAT1);
 const W=100, H=100*((MF0-MF1)/((LON1-LON0)/360));
 const X=lon=>((lon-LON0)/(LON1-LON0))*W-W/2;
 const Zc=lat=>-(((MF0-mfrac(lat))/(MF0-MF1))*H-H/2);
-const DSCALE=2.2, Y=dep=>-dep*DSCALE;
+let DSCALE=2.2; const Y=dep=>-(typeof dep==='number'?dep:0)*DSCALE;
 
 // ---------- timeline / UI ----------
 let TMAX=960,cur=0,playing=false,timer=null,selDayKey='ALL',ghost=false;
@@ -302,7 +312,7 @@ function buildList(){
     r.innerHTML='<span class="t"><span class="dd">'+dkey(q.t)+'</span>'+hm(q.t)+'</span>'
       +'<span class="badge" style="background:'+CSSCOL[q.cls]+'">'+SH[q.cls]+'</span>'
       +'<span class="info">'+(q.mag?('M'+q.mag.toFixed(1)+' '):'')+region(q)+(q.gen?' ※':'')+'</span>'
-      +'<span class="d">'+q.dep+'km</span>';
+      +'<span class="d">'+(typeof q.dep!=='number'?'深さ不明':(q.dep===0?'ごく浅い':q.dep+'km'))+'</span>';
     r.addEventListener('click',()=>{cur=q.t; if(playing)togglePlay(); update();});
     qlist.appendChild(r);
   });
@@ -405,6 +415,24 @@ histBtn.addEventListener('click',()=>{
   histBtn.classList.toggle('on',histPanel.classList.contains('open'));
   renderHist();
 });
+// depth exaggeration
+const depthScale=document.getElementById('depthScale');
+depthScale.addEventListener('change',e=>{
+  DSCALE=parseFloat(e.target.value);
+  try{buildMeshes();}catch(err){}
+  update();
+});
+function autoDepthScale(){
+  const deps=quakes.map(q=>q.dep).filter(d=>typeof d==='number');
+  if(!deps.length)return;
+  const mx=Math.max(...deps), mn=Math.min(...deps), span=mx-mn;
+  let v=2.2;
+  if(span<=4)v=10; else if(span<=8)v=6; else if(span<=14)v=4;
+  DSCALE=v;
+  const opt=[...depthScale.options].reduce((a,o)=>Math.abs(parseFloat(o.value)-v)<Math.abs(parseFloat(a.value)-v)?o:a);
+  depthScale.value=opt.value;
+}
+
 // list bottom sheet (mobile)
 const panelEl=document.getElementById('panelEl');
 const listToggle=document.getElementById('listToggle');
@@ -465,7 +493,6 @@ function parseEntries(arr){
     if(!prev||(!prev.hasCod&&rec.hasCod)||(prev.hasCod===rec.hasCod&&rec.mag!==null&&prev.mag===null))byId.set(id,rec);
   });
   const list=[...byId.values()].filter(q=>q.t>=0);
-  list.forEach(q=>{if(q.dep===null)q.dep=10;});
   list.sort((a,b)=>a.t-b.t);
   return list;
 }
@@ -481,13 +508,15 @@ liveBtn.addEventListener('click',async()=>{
     TMAX=Math.max(60,Math.ceil(Math.max(...quakes.map(q=>q.t))/60)*60);
     cur=Math.min(cur,TMAX);
     selDayKey='ALL';
+    autoDepthScale();
     try{buildMeshes();}catch(e){}
     buildStrip(); buildDates(); buildList();
     const now=new Date();
     const withPos=quakes.filter(q=>q.hasCod).length;
+    const noDep=quakes.filter(q=>typeof q.dep!=='number').length;
     srcLabel.textContent='気象庁 地震情報（実データ）'+quakes.length+'件／座標付き'+withPos+'件｜'
       +String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0')+'取得'
-      +(got.via!=='気象庁'?'（'+got.via+'経由）':'');
+      +(noDep?'／深さ不明'+noDep+'件':'')+(got.via!=='気象庁'?'（'+got.via+'経由）':'');
     srcLabel.classList.add('live');
     document.getElementById('histNote').textContent='取得した気象庁データの実測値に基づくヒストグラムです（表示時刻までの累計）。震度速報のみの地震はM・深さが未確定の場合があります。';
     liveBtn.textContent='最新データを再取得';
@@ -552,14 +581,7 @@ function fallbackGrid(){
   scene.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts),m));
 }
 
-const frame=[],YB=Y(22);
-[[X(LON0),Zc(LAT0)],[X(LON1),Zc(LAT0)],[X(LON1),Zc(LAT1)],[X(LON0),Zc(LAT1)]].forEach((p,i,arr)=>{
-  const q=arr[(i+1)%4];
-  frame.push(new THREE.Vector3(p[0],0,p[1]),new THREE.Vector3(q[0],0,q[1]));
-  frame.push(new THREE.Vector3(p[0],YB,p[1]),new THREE.Vector3(q[0],YB,q[1]));
-  frame.push(new THREE.Vector3(p[0],0,p[1]),new THREE.Vector3(p[0],YB,p[1]));
-});
-scene.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(frame),new THREE.LineBasicMaterial({color:0x3A4656})));
+const axisGroup=new THREE.Group(); scene.add(axisGroup);
 
 function label(text,px,color){
   const c=document.createElement('canvas'),g=c.getContext('2d');
@@ -570,12 +592,27 @@ function label(text,px,color){
   const s=new THREE.Sprite(new THREE.SpriteMaterial({map:tex,transparent:true,depthTest:false}));
   s.scale.set(c.width/6,c.height/6,1); return s;
 }
-[0,5,10,15,20].forEach(d=>{
-  const s=label(d+' km',22,'#8FA0B3'); s.position.set(X(LON0)-10,Y(d),Zc(LAT1)); scene.add(s);
-  scene.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(
-    [new THREE.Vector3(X(LON0)-2,Y(d),Zc(LAT1)),new THREE.Vector3(X(LON0),Y(d),Zc(LAT1))]),
-    new THREE.LineBasicMaterial({color:0x556275})));
-});
+function buildAxis(){
+  while(axisGroup.children.length)axisGroup.remove(axisGroup.children[0]);
+  const deps=quakes.map(q=>q.dep).filter(d=>typeof d==='number');
+  const dmax=Math.max(20,Math.ceil((deps.length?Math.max(...deps):20)/5)*5);
+  const step=dmax<=20?5:(dmax<=40?10:20);
+  const YB=Y(dmax+2);
+  const frame=[];
+  [[X(LON0),Zc(LAT0)],[X(LON1),Zc(LAT0)],[X(LON1),Zc(LAT1)],[X(LON0),Zc(LAT1)]].forEach((p,i,arr)=>{
+    const q=arr[(i+1)%4];
+    frame.push(new THREE.Vector3(p[0],0,p[1]),new THREE.Vector3(q[0],0,q[1]));
+    frame.push(new THREE.Vector3(p[0],YB,p[1]),new THREE.Vector3(q[0],YB,q[1]));
+    frame.push(new THREE.Vector3(p[0],0,p[1]),new THREE.Vector3(p[0],YB,p[1]));
+  });
+  axisGroup.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(frame),new THREE.LineBasicMaterial({color:0x3A4656})));
+  for(let d=0;d<=dmax;d+=step){
+    const s=label(d+' km',22,'#8FA0B3'); s.position.set(X(LON0)-10,Y(d),Zc(LAT1)); axisGroup.add(s);
+    axisGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(
+      [new THREE.Vector3(X(LON0)-2,Y(d),Zc(LAT1)),new THREE.Vector3(X(LON1),Y(d),Zc(LAT1))]),
+      new THREE.LineBasicMaterial({color:0x2E3A4A,transparent:true,opacity:0.55})));
+  }
+}
 const north=label('北',26,'#B8C4D0'); north.position.set(0,4,Zc(LAT1)-5); scene.add(north);
 [[130.2,'130.2°E'],[130.6,'130.6°E'],[131.0,'131.0°E']].forEach(a=>{const s=label(a[1],17,'#5E6E80');s.position.set(X(a[0]),1.5,Zc(LAT0)+6);scene.add(s);});
 [[32.2,'32.2°N'],[32.6,'32.6°N'],[33.0,'33.0°N']].forEach(a=>{const s=label(a[1],17,'#5E6E80');s.position.set(X(LON1)+9,1.5,Zc(a[0]));scene.add(s);});
@@ -590,12 +627,13 @@ const quakeGroup=new THREE.Group(); scene.add(quakeGroup);
 const geoCache={};
 var msLabel=null;
 function buildMeshes(){
+  buildAxis();
   while(quakeGroup.children.length)quakeGroup.remove(quakeGroup.children[0]);
   quakes.forEach(q=>{
     if(q.lon<LON0||q.lon>LON1||q.lat<LAT0||q.lat>LAT1){q.mesh=null;return;}
     if(!geoCache[q.cls])geoCache[q.cls]=new THREE.SphereGeometry(RAD[q.cls],14,12);
     const mesh=new THREE.Mesh(geoCache[q.cls],new THREE.MeshLambertMaterial({color:COL[q.cls],transparent:true,opacity:0}));
-    mesh.position.set(X(q.lon),Y(q.dep),Zc(q.lat));
+    mesh.position.set(X(q.lon),Y(q.dep)+(typeof q.dep==='number'?0:1.2),Zc(q.lat));
     mesh.visible=false; quakeGroup.add(mesh); q.mesh=mesh;
     if(q.major||q.cls>=4){
       const line=new THREE.Line(new THREE.BufferGeometry().setFromPoints(
@@ -607,7 +645,7 @@ function buildMeshes(){
   if(msLabel)scene.remove(msLabel);
   const ms=quakes.find(q=>q.cls===8);
   if(ms){
-    msLabel=label('本震 M7.1・深さ'+ms.dep+'km',24,'#F0A8A5');
+    msLabel=label('本震'+(ms.mag?' M'+ms.mag.toFixed(1):'')+'・深さ'+(typeof ms.dep==='number'?ms.dep+'km':'不明'),24,'#F0A8A5');
     msLabel.position.set(X(ms.lon)+3,Y(ms.dep)-4,Zc(ms.lat)); msLabel.visible=false; scene.add(msLabel);
   }
 }
